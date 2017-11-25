@@ -1,6 +1,4 @@
-import jwt from 'jsonwebtoken';
 import moment from 'moment';
-import NodeRsa from 'node-rsa';
 import crypto from 'crypto';
 
 // const encryption = require('../server');
@@ -11,7 +9,9 @@ import { Client } from '../models/Client';
 
 
 /**
- *
+ * POST /register
+ * body: {email, password (unencrypted), name}
+ * @response: (successful) -> {message, clientKey}
  */
 const register = async (req, res) => {
 
@@ -20,7 +20,6 @@ const register = async (req, res) => {
   let client = await Client.findOne({ email });
 
   if(client) {
-    console.log(client);
     console.log(`Account under ${email} already exists!`);
     return res.status(409).send({message: `Account under ${email} already exists!`});
   }
@@ -44,6 +43,10 @@ const register = async (req, res) => {
   }
 };
 
+/**
+ * POST /login?email=<email>
+ * body: {encrypted: password (encrypted with client key)}
+ */
 const login = async (req, res) => {
   const { email } = req.query;
   const { encrypted } = req.body;
@@ -54,15 +57,74 @@ const login = async (req, res) => {
     return res.status(401).send({message: `No client registered with ${email}`});
   }
 
-  const password = decrypt(encrypted, req.app.get('encryption'), client.clientKey);
+  // Decrypt their password using the symmetric clientKey
+  const encryption = req.app.get('encryption');
+  const password = decrypt(encrypted, encryption, client.clientKey);
 
+  // Check the password matches with our hash of their password
   if(!client.isValidPassword(password)) {
     return res.status(403).send({message: `Incorrect password supplied for ${email}`})
   }
 
-  res.send("logged in!")
+
+  // Create a random session key that the client can use to encrypt their traffic to other servers
+  // Essentially building a (changeable) symmetric key between client and our servers
+  const sessionKey = crypto.randomBytes(48).toString('hex');
+
+
+  // TODO: Ensure that this is safe (allows us to extract useful info (clients id) AND verify them)
+  // Generate ticket for our servers to decrypt
+  // This can contain any useful information we may need
+  let ticket = JSON.stringify({
+    _id: client._id,
+    expires: moment().add('1h'),
+    sessionKey,
+    // noise: crypto.randomBytes(48).toString('hex')   // salt so tickets not always same - done by expires now
+  });
+
+
+  // The token contains a copy of the sessionKey (for the clients use)
+  // and an encrypted (with commonly know server key) version of the ticket (for server use)
+  const token = {
+    sessionKey,
+    ticket: encrypt(ticket, encryption, encryption.serverKey)
+  };
+
+  res.send({message: `Successfully logged in`, token: encrypt(JSON.stringify(token), encryption, client.clientKey)});
+};
+
+
+/**
+ * This is just for debugging
+ * POST /verifyTicket
+ * body: {ticket}
+ */
+const verifyTicket = async (req, res) => {
+  const encryption = req.app.get('encryption');
+  const { ticket } = req.body;
+  console.log(`Verifying ticket: ${ticket}`);
+  const decryptedString = decrypt(ticket, encryption, encryption.serverKey);
+
+  try {
+    const decrypted = JSON.parse(decryptedString);
+    console.log(`Successfully decrypted: ${JSON.stringify(decrypted)}`);
+    res.send(decrypted);
+  } catch (err) {
+    console.error(err);
+    res.status(400).send("Could not decrypt - token invalid");
+  }
 
 };
+
+
+
+
+
+
+
+
+
+
 
 
 function generateClientKey(data, encryption) {
@@ -99,7 +161,8 @@ function decrypt(data, encryption, expectedKey) {
 
 module.exports = {
   register,
-  login
+  login,
+  verifyTicket
 };
 
 

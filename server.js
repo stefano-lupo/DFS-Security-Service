@@ -5,7 +5,8 @@ const encryption = {
   algorithm: process.env.SYMMETRIC_ENCRYPTION,
   plainEncoding: process.env.PLAIN_ENCODING,
   encryptedEncoding: process.env.ENCRYPTED_ENCODING,
-  generationKey: process.env.GENERATION_KEY
+  generationKey: process.env.GENERATION_KEY,
+  serverKey: process.env.SERVER_KEY
 };
 exports.encryption = encryption;
 
@@ -44,7 +45,14 @@ app.use(morgan('dev'));
 // Note assuming this is done over HTTPS and thus safe
 app.post('/register', SecurityController.register);
 
+// Encrypted with clientKeys
 app.post('/login', SecurityController.login);
+
+
+
+
+// Debug endpoints
+app.post('/verifyTicket', SecurityController.verifyTicket);
 
 
 
