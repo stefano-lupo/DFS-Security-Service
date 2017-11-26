@@ -5,6 +5,7 @@ const encryption = {
   algorithm: process.env.SYMMETRIC_ENCRYPTION,
   plainEncoding: process.env.PLAIN_ENCODING,
   encryptedEncoding: process.env.ENCRYPTED_ENCODING,
+  ticketExpiry: process.env.TICKET_EXPIRY,
   generationKey: process.env.GENERATION_KEY,
   serverKey: process.env.SERVER_KEY
 };

@@ -77,7 +77,7 @@ const login = async (req, res) => {
   // This can contain any useful information we may need
   let ticket = JSON.stringify({
     _id: client._id,
-    expires: moment().add('1h'),
+    expires: moment().add(encryption.ticketExpiry, 'h'),
     sessionKey,
     // noise: crypto.randomBytes(48).toString('hex')   // salt so tickets not always same - done by expires now
   });
@@ -102,20 +102,18 @@ const login = async (req, res) => {
 const verifyTicket = async (req, res) => {
   const encryption = req.app.get('encryption');
   const { ticket } = req.body;
-  console.log(`Verifying ticket: ${ticket}`);
-  const decryptedString = decrypt(ticket, encryption, encryption.serverKey);
 
   try {
+    console.log(`Verifying ticket: ${ticket}`);
+    const decryptedString = decrypt(ticket, encryption, encryption.serverKey);
     const decrypted = JSON.parse(decryptedString);
     console.log(`Successfully decrypted: ${JSON.stringify(decrypted)}`);
     res.send(decrypted);
   } catch (err) {
     console.error(err);
-    res.status(400).send("Could not decrypt - token invalid");
+    res.status(400).send({message: "Could not decrypt - token invalid"});
   }
-
 };
-
 
 
 
@@ -133,7 +131,7 @@ function generateClientKey(data, encryption) {
   const cipher = crypto.createCipher(algorithm, generationKey);
   let ciphered = cipher.update(data, plainEncoding, encryptedEncoding);
   ciphered += cipher.final(encryptedEncoding);
-  console.log(`Generated client key: ${ciphered}`);
+  // console.log(`Generated client key: ${ciphered}`);
 
   return ciphered;
 }
@@ -143,18 +141,19 @@ function encrypt(data, encryption, key) {
   const cipher = crypto.createCipher(algorithm, key);
   let ciphered = cipher.update(data, plainEncoding, encryptedEncoding);
   ciphered += cipher.final(encryptedEncoding);
-  console.log(`Encrypted ${data}: ${ciphered}`);
+  // console.log(`Encrypted ${data}: ${ciphered}`);
 
   return ciphered;
 }
 
 function decrypt(data, encryption, expectedKey) {
-  const { algorithm, generationKey, plainEncoding, encryptedEncoding} = encryption;
+  const { algorithm, plainEncoding, encryptedEncoding} = encryption;
+
 
   const decipher = crypto.createDecipher(algorithm, expectedKey);
   let deciphered = decipher.update(data, encryptedEncoding, plainEncoding);
   deciphered += decipher.final(plainEncoding);
-  console.log(`Decrypted ${data}: ${deciphered}`);
+  // console.log(`Decrypted ${data}: ${deciphered}`);
 
   return deciphered
 }
