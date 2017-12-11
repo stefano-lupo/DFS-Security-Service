@@ -1,11 +1,11 @@
 import moment from 'moment';
 import crypto from 'crypto';
-
-// const encryption = require('../server');
-// console.log(encryption)
-
 import { Client } from '../models/Client';
 
+
+/********************************************************************************************************
+ * Client API
+ *******************************************************************************************************/
 
 
 /**
@@ -13,29 +13,30 @@ import { Client } from '../models/Client';
  * body: {email, password (unencrypted), name}
  * @response: (successful) -> {message, clientKey}
  */
-const register = async (req, res) => {
+export const register = async (req, res) => {
 
   const { email, password, name } = req.body;
 
+  // Ensure client doesnt already exist
   let client = await Client.findOne({ email });
-
   if(client) {
     console.log(`Account under ${email} already exists!`);
     return res.status(409).send({message: `Account under ${email} already exists!`});
   }
 
+  // Create clients account
   client = new Client({email, name});
   client.password = client.hash(password);
+
+  // Generate the symmetric client key using the clients hashed password and save it
   client.clientKey = generateClientKey(client.password, req.app.get('encryption'));
-
-  // DEBUG: Just logging this out so i can use it in postman
-  console.log(`DEBUG: ${email}'s encrypted password with it's client key:`);
-  encrypt(password, req.app.get('encryption'), client.clientKey);
-
 
   try {
     client.save();
     console.log(`${email} added`);
+
+    // Send the client the symmetric key
+    // This is used for all subsequent comms with security service (for logging in)
     res.send({message: `Account for ${email} successfully created`, clientKey: client.clientKey})
   } catch (error) {
     console.log(error);
@@ -47,7 +48,7 @@ const register = async (req, res) => {
  * POST /login?email=<email>
  * body: {encrypted: password (encrypted with client key)}
  */
-const login = async (req, res) => {
+export const login = async (req, res) => {
   const { email } = req.query;
   const { encrypted } = req.body;
 
@@ -59,7 +60,14 @@ const login = async (req, res) => {
 
   // Decrypt their password using the symmetric clientKey
   const encryption = req.app.get('encryption');
-  const password = decrypt(encrypted, encryption, client.clientKey);
+
+  let password;
+  try {
+    password = decrypt(encrypted, encryption, client.clientKey);
+  } catch (err) {
+    console.error(`Couldnt decrpyt password: ${err}`);
+    return res.status(403).send({message: `Invalid client key used for encryption`});
+  }
 
   // Check the password matches with our hash of their password
   if(!client.isValidPassword(password)) {
@@ -72,19 +80,17 @@ const login = async (req, res) => {
   const sessionKey = crypto.randomBytes(48).toString('hex');
 
 
-  // TODO: Ensure that this is safe (allows us to extract useful info (clients id) AND verify them)
   // Generate ticket for our servers to decrypt
   // This can contain any useful information we may need
   let ticket = JSON.stringify({
     _id: client._id,
-    expires: moment().add(encryption.ticketExpiry, 'h'),
+    expires: moment().add(encryption.ticketExpiry, 'h'), // also means tickets aren't always same
     sessionKey,
-    // noise: crypto.randomBytes(48).toString('hex')   // salt so tickets not always same - done by expires now
   });
 
 
   // The token contains a copy of the sessionKey (for the clients use)
-  // and an encrypted (with commonly know server key) version of the ticket (for server use)
+  // and an encrypted (with key known to all servers) version of the ticket (for server use)
   const token = {
     sessionKey,
     ticket: encrypt(ticket, encryption, encryption.serverKey)
@@ -94,74 +100,77 @@ const login = async (req, res) => {
 };
 
 
-/**
- * This is just for debugging
- * POST /verifyTicket
- * body: {ticket}
- */
-const verifyTicket = async (req, res) => {
-  const encryption = req.app.get('encryption');
-  const { ticket } = req.body;
+/********************************************************************************************************
+ * Inter Service API
+ *******************************************************************************************************/
 
-  try {
-    console.log(`Verifying ticket: ${ticket}`);
-    const decryptedString = decrypt(ticket, encryption, encryption.serverKey);
-    const decrypted = JSON.parse(decryptedString);
-    console.log(`Successfully decrypted: ${JSON.stringify(decrypted)}`);
-    res.send(decrypted);
-  } catch (err) {
-    console.error(err);
-    res.status(400).send({message: "Could not decrypt - token invalid"});
+/**
+ * Get /client/:email
+ * Gets client's _id associated with an email
+ * This allows clients to query public files that other users have by the other users email
+ * The directory service then hits this endpoint to get the relevant _id of that user
+ */
+export const getClientByEmail = async (req, res) => {
+  const { email } = req.params;
+  const client = await Client.findOne({email});
+
+  if(!client) {
+    return res.status(404).send({message: `No client with email ${email} has registered`});
   }
+
+  res.send({_id: client._id});
 };
 
 
+/********************************************************************************************************
+ * Helper Methods
+ *******************************************************************************************************/
 
-
-
-
-
-
-
-
-
+/**
+ * Generates a client key on registration that will be used as a symmetric key
+ * for communication between the client and this service (client encrypts login requests with this key).
+ * This client key is the passed in data (eg hash of password) encrypted with the specified encryption
+ * scheme and the GENERATION_KEY known only to this service.
+ * @param data to be encypted
+ * @param encryption scheme to be used
+ */
 function generateClientKey(data, encryption) {
-
   const { algorithm, generationKey, plainEncoding, encryptedEncoding} = encryption;
   const cipher = crypto.createCipher(algorithm, generationKey);
   let ciphered = cipher.update(data, plainEncoding, encryptedEncoding);
   ciphered += cipher.final(encryptedEncoding);
-  // console.log(`Generated client key: ${ciphered}`);
 
   return ciphered;
 }
 
+/**
+ * Encrypts some data using the given encryption parameters and secret key
+ * @param data string to be encrypted
+ * @param encryption schema to be used for encryption
+ * @param key the secret key to use for the encryption
+ */
 function encrypt(data, encryption, key) {
   const { algorithm,  plainEncoding, encryptedEncoding} = encryption;
   const cipher = crypto.createCipher(algorithm, key);
   let ciphered = cipher.update(data, plainEncoding, encryptedEncoding);
   ciphered += cipher.final(encryptedEncoding);
-  // console.log(`Encrypted ${data}: ${ciphered}`);
 
   return ciphered;
 }
 
+/**
+ * Decrypts some data using the encryption key and expected key
+ * @param data to be decrypted
+ * @param encryption scheme being used
+ * @param expectedKey the key that the data should have been encrypted with
+ */
 function decrypt(data, encryption, expectedKey) {
   const { algorithm, plainEncoding, encryptedEncoding} = encryption;
-
 
   const decipher = crypto.createDecipher(algorithm, expectedKey);
   let deciphered = decipher.update(data, encryptedEncoding, plainEncoding);
   deciphered += decipher.final(plainEncoding);
-  // console.log(`Decrypted ${data}: ${deciphered}`);
 
   return deciphered
 }
-
-module.exports = {
-  register,
-  login,
-  verifyTicket
-};
-
 

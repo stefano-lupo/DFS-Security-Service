@@ -1,5 +1,11 @@
+import express from 'express';
+import mongoose from 'mongoose';
+import bodyParser from 'body-parser';
+import morgan from 'morgan';
+
 // Initialize .env
-require('dotenv').config();
+import dotenv from 'dotenv';
+dotenv.config();
 
 const encryption = {
   algorithm: process.env.SYMMETRIC_ENCRYPTION,
@@ -9,22 +15,17 @@ const encryption = {
   generationKey: process.env.GENERATION_KEY,
   serverKey: process.env.SERVER_KEY
 };
-exports.encryption = encryption;
 
-import express from 'express';
-import mongoose from 'mongoose';
-
-
-import bodyParser from 'body-parser';
-import morgan from 'morgan';
-import jwt from 'jsonwebtoken';
+const port = process.argv[2] || process.env.PORT || 3003;
 
 // Import Controllers
-import SecurityController from './controllers/SecurityController';
+import * as SecurityController from './controllers/SecurityController';
+
 
 const app = express();
 
-
+// expose encryption variables to app
+app.set('encryption', encryption);
 
 
 // Initialize the DB
@@ -35,7 +36,6 @@ db.on('error', console.error.bind(console, 'connection error:'));
 db.once('open', function() {
   console.log("Connected to Database");
 });
-
 
 
 app.use(bodyParser.urlencoded({extended: true}));   // Parses application/x-www-form-urlencoded for req.body
@@ -49,20 +49,14 @@ app.post('/register', SecurityController.register);
 // Encrypted with clientKeys
 app.post('/login', SecurityController.login);
 
+// Inter service endpoints
+app.get('/client/:email', SecurityController.getClientByEmail);
 
 
-
-// Debug endpoints
-app.post('/verifyTicket', SecurityController.verifyTicket);
-
-
-
-// expose environment variables to app
-app.set('encryption', encryption);
 
 // Initialize the Server
-app.listen(3003, function() {
-  console.log('Security Service on port 3003');
+app.listen(port, () => {
+  console.log(`Security Service on port ${port}`);
 });
 
 
